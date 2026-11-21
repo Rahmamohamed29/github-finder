@@ -7,10 +7,34 @@ const QUICK_PICKS = [
   "sindresorhus",
 ];
 
+// Fetch GitHub API with error handling
+async function fetchGitHub(url, signal) {
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    if (response.status === 403 || response.status === 429) {
+      throw new Error(
+        "GitHub API rate limit reached. Please try again in a bit."
+      );
+    }
+
+    if (response.status === 404) {
+      throw new Error("User not found (404)");
+    }
+
+    throw new Error(`GitHub API error (${response.status})`);
+  }
+
+  return response.json();
+}
+
+// GitHub Logo
 function GitHubLogo({ isLight }) {
   return (
     <span
-      className={`text-xl ${isLight ? "text-violet-700" : "text-violet-300"}`}
+      className={`text-xl ${
+        isLight ? "text-violet-700" : "text-violet-300"
+      }`}
       aria-hidden="true"
     >
       💻
@@ -18,18 +42,22 @@ function GitHubLogo({ isLight }) {
   );
 }
 
+// Search Icon
 function SearchIcon() {
   return <span aria-hidden="true">🔍</span>;
 }
 
+// Sun Icon
 function SunIcon() {
   return <span aria-hidden="true">☀️</span>;
 }
 
+// Moon Icon
 function MoonIcon() {
   return <span aria-hidden="true">🌙</span>;
 }
 
+// Repositories List
 function RepoList({ repos, isLight }) {
   const [selectedLang, setSelectedLang] = useState("All");
 
@@ -38,7 +66,9 @@ function RepoList({ repos, isLight }) {
     ...new Set(repos.map((repo) => repo.language).filter(Boolean)),
   ];
 
-  const activeLang = languages.includes(selectedLang) ? selectedLang : "All";
+  const activeLang = languages.includes(selectedLang)
+    ? selectedLang
+    : "All";
 
   const filteredRepos =
     activeLang === "All"
@@ -56,6 +86,7 @@ function RepoList({ repos, isLight }) {
           <div className="flex flex-wrap items-center gap-1.5 text-xs">
             {languages.map((lang) => {
               const isActive = activeLang === lang;
+
               return (
                 <button
                   key={lang}
@@ -80,7 +111,9 @@ function RepoList({ repos, isLight }) {
       {filteredRepos.length === 0 ? (
         <p
           className={
-            isLight ? "text-slate-600 text-sm" : "text-slate-400 text-sm"
+            isLight
+              ? "text-slate-600 text-sm"
+              : "text-slate-400 text-sm"
           }
         >
           No public repositories found.
@@ -107,6 +140,7 @@ function RepoList({ repos, isLight }) {
                 >
                   {repo.name}
                 </h4>
+
                 <span className="text-xs shrink-0">
                   ⭐ {repo.stargazers_count}
                 </span>
@@ -136,6 +170,7 @@ function RepoList({ repos, isLight }) {
   );
 }
 
+// User Card
 function UserCard({ user, repos, isLight }) {
   return (
     <div
@@ -155,7 +190,10 @@ function UserCard({ user, repos, isLight }) {
         <div className="flex-1 text-center sm:text-left">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
-              <h2 className="text-xl font-bold">{user.name || user.login}</h2>
+              <h2 className="text-xl font-bold">
+                {user.name || user.login}
+              </h2>
+
               <p
                 className={`text-sm font-mono ${
                   isLight ? "text-violet-600" : "text-violet-300"
@@ -191,6 +229,7 @@ function UserCard({ user, repos, isLight }) {
             <p>
               Followers: <strong>{user.followers}</strong>
             </p>
+
             <p>
               Public Repos: <strong>{user.public_repos}</strong>
             </p>
@@ -198,21 +237,42 @@ function UserCard({ user, repos, isLight }) {
         </div>
       </div>
 
-      <RepoList repos={repos} isLight={isLight} />
+      {/* key makes the language filter reset for a new user */}
+      <RepoList
+        key={user.login}
+        repos={repos}
+        isLight={isLight}
+      />
     </div>
   );
 }
 
+// Main Component
 export default function GitHubFinder() {
   const [input, setInput] = useState("");
   const [query, setQuery] = useState("");
+  const [searchVersion, setSearchVersion] = useState(0);
+
   const [user, setUser] = useState(null);
   const [repos, setRepos] = useState([]);
-  // "idle" | "loading" | "error" | "done"
+
+  // idle | loading | error | done
   const [status, setStatus] = useState("idle");
+
   const [errorMsg, setErrorMsg] = useState("");
   const [isLight, setIsLight] = useState(false);
 
+  // Load last searched user
+  useEffect(() => {
+    const savedUser = localStorage.getItem("lastUser");
+
+    if (savedUser) {
+      setInput(savedUser);
+      setQuery(savedUser);
+    }
+  }, []);
+
+  // Search GitHub
   useEffect(() => {
     if (!query) {
       setUser(null);
@@ -223,66 +283,105 @@ export default function GitHubFinder() {
       return;
     }
 
-    let ignore = false;
-    setStatus("loading");
-    setErrorMsg("");
+    const controller = new AbortController();
 
-    Promise.all([
-      fetch(`https://api.github.com/users/${query}`).then((res) => {
-        if (!res.ok) {
-          if (res.status === 403) {
-            throw new Error(
-              "GitHub API rate limit reached. Please try again in a bit."
-            );
-          }
-          throw new Error("User not found (404)");
-        }
-        return res.json();
-      }),
-      fetch(
-        `https://api.github.com/users/${query}/repos?sort=updated&per_page=100`
-      ).then((res) => {
-        if (!res.ok) {
-          return [];
-        }
-        return res.json();
-      }),
-    ])
-      .then(([userData, reposData]) => {
-        if (ignore) return;
+    const searchUser = async () => {
+      setStatus("loading");
+      setErrorMsg("");
+
+      try {
+        const [userData, reposData] = await Promise.all([
+          fetchGitHub(
+            `https://api.github.com/users/${encodeURIComponent(query)}`,
+            controller.signal
+          ),
+
+          fetchGitHub(
+            `https://api.github.com/users/${encodeURIComponent(query)}/repos?sort=updated&per_page=100`,
+            controller.signal
+          ),
+        ]);
+
+        // Save user data
         setUser(userData);
+
+        // Save repositories
         setRepos(Array.isArray(reposData) ? reposData : []);
+
         setStatus("done");
+
         document.title = userData.name || userData.login;
+
         localStorage.setItem("lastUser", query);
-      })
-      .catch((err) => {
-        if (ignore) return;
+      } catch (err) {
+        // Ignore cancelled requests
+        if (err.name === "AbortError") {
+          return;
+        }
+
         setUser(null);
         setRepos([]);
+
         setStatus("error");
-        setErrorMsg(err.message);
+        setErrorMsg(
+          err instanceof TypeError
+            ? "Network error. Please check your internet connection."
+            : err.message
+        );
+
         document.title = "GitHub Finder";
-      });
-
-    return () => {
-      ignore = true;
+      }
     };
-  }, [query]);
 
+    searchUser();
+
+    // Cancel previous request
+    return () => {
+      controller.abort();
+    };
+  }, [query, searchVersion]);
+
+  // Search Form
   function handleSearch(e) {
     e.preventDefault();
-    setQuery(input.trim());
+
+    const username = input.trim();
+
+    if (!username) {
+      setErrorMsg("Please enter a GitHub username.");
+      setStatus("error");
+      return;
+    }
+
+    setQuery(username);
+
+    // Allow searching for the same username again
+    setSearchVersion((prev) => prev + 1);
   }
 
+  // Clear Search
   function handleClear() {
     setInput("");
     setQuery("");
+
+    setUser(null);
+    setRepos([]);
+
+    setStatus("idle");
+    setErrorMsg("");
+
+    localStorage.removeItem("lastUser");
+
+    document.title = "GitHub Finder";
   }
 
+  // Quick Picks
   function handleQuickPick(username) {
     setInput(username);
     setQuery(username);
+
+    // Trigger search even if the same user is selected
+    setSearchVersion((prev) => prev + 1);
   }
 
   return (
@@ -294,6 +393,7 @@ export default function GitHubFinder() {
       }`}
     >
       <div className="mx-auto max-w-5xl px-6 py-7">
+
         {/* Top Header */}
         <header className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-3.5">
@@ -306,10 +406,12 @@ export default function GitHubFinder() {
             >
               <GitHubLogo isLight={isLight} />
             </div>
+
             <div>
               <h1 className="text-xl font-bold tracking-tight">
                 GitHub Radar
               </h1>
+
               <p
                 className={`text-xs ${
                   isLight ? "text-slate-500" : "text-slate-400"
@@ -320,6 +422,7 @@ export default function GitHubFinder() {
             </div>
           </div>
 
+          {/* Theme Button */}
           <button
             type="button"
             onClick={() => setIsLight(!isLight)}
@@ -330,7 +433,10 @@ export default function GitHubFinder() {
             }`}
           >
             {isLight ? <MoonIcon /> : <SunIcon />}
-            <span>{isLight ? "Dark Mode" : "Light Mode"}</span>
+
+            <span>
+              {isLight ? "Dark Mode" : "Light Mode"}
+            </span>
           </button>
         </header>
 
@@ -350,9 +456,11 @@ export default function GitHubFinder() {
               <span className="pointer-events-none absolute left-3.5 text-sm">
                 <SearchIcon />
               </span>
+
               <input
                 type="text"
                 value={input}
+                required
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Search GitHub username (e.g. Rahmamohamed29)..."
                 className={`w-full rounded-xl border py-2.5 pl-10 text-sm outline-none transition ${
@@ -363,6 +471,7 @@ export default function GitHubFinder() {
                     : "bg-slate-950/80 border-violet-500/25 text-white placeholder-slate-500 focus:border-violet-400"
                 }`}
               />
+
               {input && (
                 <button
                   type="button"
@@ -381,20 +490,25 @@ export default function GitHubFinder() {
 
             <button
               type="submit"
-              className="rounded-xl bg-violet-500 hover:bg-violet-400 px-5 py-2.5 text-sm font-semibold text-white transition cursor-pointer shrink-0"
+              disabled={status === "loading"}
+              className="rounded-xl bg-violet-500 hover:bg-violet-400 disabled:opacity-60 disabled:cursor-not-allowed px-5 py-2.5 text-sm font-semibold text-white transition cursor-pointer shrink-0"
             >
-              Search
+              {status === "loading" ? "Searching..." : "Search"}
             </button>
           </form>
 
           {/* Quick Picks */}
           <div className="mt-3.5 flex flex-wrap items-center gap-2 text-xs">
-            <span className={isLight ? "text-slate-500" : "text-slate-400"}>
+            <span
+              className={isLight ? "text-slate-500" : "text-slate-400"}
+            >
               Quick picks:
             </span>
+
             {QUICK_PICKS.map((username) => {
               const isSelected =
                 query.toLowerCase() === username.toLowerCase();
+
               return (
                 <button
                   key={username}
@@ -438,7 +552,11 @@ export default function GitHubFinder() {
 
         {/* Result Card + Repos */}
         {status === "done" && user && (
-          <UserCard user={user} repos={repos} isLight={isLight} />
+          <UserCard
+            user={user}
+            repos={repos}
+            isLight={isLight}
+          />
         )}
       </div>
     </div>
